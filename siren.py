@@ -55,7 +55,7 @@ if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device}")
 
-    resize = True
+    resize = False
 
     # load dataset
     imread_mode = cv.IMREAD_UNCHANGED
@@ -69,12 +69,12 @@ if __name__ == "__main__":
     diffuse = np.log(cv.imread("data/diffuse.exr", imread_mode) + 1) * math.pi * 2
     features = [albedo, normal, shadow, depth]
     height, width = image.shape[:2]
-    width, height = width // 2, height // 2
-    pixel_count = height * width
     if resize:
+        width, height = width // 2, height // 2
         features = [cv.resize(f, (width, height)) for f in features]
         image = cv.resize(image, (width, height))
         reference = cv.resize(reference, (width, height))
+    pixel_count = height * width
     image_tm = tonemapping(image)
     reference_tm = tonemapping(reference)
     cv.imshow("Origin", image_tm)
