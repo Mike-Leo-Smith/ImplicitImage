@@ -88,20 +88,24 @@ if __name__ == "__main__":
     print(f"Device: {device}")
 
     # load dataset
-    image = np.clip(cv.imread("data/reference.exr", cv.IMREAD_UNCHANGED), 0, 1)
+    image = np.clip(cv.imread("data/color.exr", cv.IMREAD_UNCHANGED), 0, 1)
+    reference = np.clip(cv.imread("data/reference.exr", cv.IMREAD_UNCHANGED), 0, 1)
     albedo = cv.imread("data/albedo.exr", cv.IMREAD_UNCHANGED)
     normal = cv.imread("data/normal.exr", cv.IMREAD_UNCHANGED)
     height, width = image.shape[:2]
     width, height = width // 2, height // 2
     pixel_count = height * width
     image = cv.resize(image, (width, height))
-    albedo = cv.resize(albedo, (width, height)) * 10
-    normal = cv.resize(normal, (width, height)) * 5 + 5
+    reference = cv.resize(reference, (width, height))
+    albedo = cv.resize(albedo, (width, height)) * math.pi * 2
+    normal = cv.resize(normal, (width, height)) * math.pi + math.pi
     image_tm = tonemapping(image)
+    reference_tm = tonemapping(reference)
     cv.imshow("Origin", image_tm)
+    cv.imshow("Reference", reference_tm)
     cv.waitKey(1)
-    x_coords = np.transpose(np.reshape(np.repeat(np.arange(width, dtype=np.float32), height), [width, height]))
-    y_coords = np.reshape(np.repeat(np.arange(height, dtype=np.float32), width), [height, width])
+    x_coords = np.transpose(np.reshape(np.repeat(np.arange(width, dtype=np.float32), height), [width, height])) / width * math.pi * 2
+    y_coords = np.reshape(np.repeat(np.arange(height, dtype=np.float32), width), [height, width]) / height * math.pi * 2
     coords = np.reshape(np.dstack([x_coords, y_coords]), [-1, 2])
     image = torch.from_numpy(np.reshape(image, [-1, 3])).to(device)
     albedo = torch.from_numpy(np.reshape(albedo, [-1, 3])).to(device)
@@ -136,10 +140,10 @@ if __name__ == "__main__":
             loss.backward()
             optimizer.step()
         # test
-        jitter = torch.rand_like(coords)
-        # jitter = torch.zeros_like(coords)
+        # jitter = torch.rand_like(coords)
+        jitter = torch.zeros_like(coords)
         recon = np.reshape(model(coords + jitter, albedo, normal).detach().cpu().numpy(), [height, width, 3])
-        if epoch >= 1024:
+        if epoch >= 768:
             # accum = recon if accum is None else 0.8 * accum + 0.2 * recon
             frame_count += 1
             t = 1 / frame_count
@@ -150,9 +154,9 @@ if __name__ == "__main__":
             print(f"Batch Size: {batch_size}")
         recon_tm = tonemapping(recon)
         cv.imshow("Reconstruct", recon_tm)
-        abs_diff = cv.absdiff(recon_tm, image_tm)
+        abs_diff = cv.absdiff(recon_tm, reference_tm)
         print(f"Epoch #{epoch}: {np.sqrt(np.mean(np.square(np.float32(abs_diff))))}")
-        cv.imshow("Difference", cv.applyColorMap(abs_diff, cv.COLORMAP_JET))
+        cv.imshow("Error", cv.applyColorMap(abs_diff, cv.COLORMAP_JET))
         cv.waitKey(1)
         # cv.imwrite(f"data/test-{epoch}.exr", recon)
     cv.waitKey()
