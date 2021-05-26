@@ -28,15 +28,15 @@ class SIREN(nn.Module):
     def __init__(self):
         super(SIREN, self).__init__()
         self.layers = nn.Sequential(
-            nn.Linear(8, 256),
+            nn.Linear(8, 128),
+            Sin(),
+            nn.Linear(128, 256),
             Sin(),
             nn.Linear(256, 128),
             Sin(),
-            nn.Linear(128, 128),
+            nn.Linear(128, 64),
             Sin(),
-            # nn.Linear(128, 128),
-            # Sin(),
-            nn.Linear(128, 3),
+            nn.Linear(64, 3),
             nn.ReLU())
 
     def forward(self, coords, albedo, normal):
@@ -49,18 +49,19 @@ class MLP(nn.Module):
         super(MLP, self).__init__()
         self.layers = nn.Sequential(
             PositionalEncoding(16),
-            nn.Linear(32, 128),
+            nn.Linear(16 * 8, 128),
             nn.ReLU(),
-            nn.Linear(128, 128),
+            nn.Linear(128, 256),
+            nn.ReLU(),
+            nn.Linear(256, 128),
             nn.ReLU(),
             nn.Linear(128, 64),
             nn.ReLU(),
-            nn.Linear(64, 16),
-            nn.ReLU(),
-            nn.Linear(16, 3),
+            nn.Linear(64, 3),
             nn.ReLU())
 
-    def forward(self, x):
+    def forward(self, coords, albedo, normal):
+        x = torch.hstack([coords, albedo, normal])
         return self.layers(x)
 
 
@@ -108,7 +109,7 @@ if __name__ == "__main__":
     coords = torch.from_numpy(coords).to(device)
 
     # create model
-    model = SIREN().to(device)
+    model = MLP().to(device)
     loss_fn = nn.MSELoss()
     adam = torch.optim.Adam(model.parameters())
     sgd = torch.optim.SGD(model.parameters(), lr=0.0001)
