@@ -34,9 +34,9 @@ class SIREN(nn.Module):
             Sin(),
             nn.Linear(256, 128),
             Sin(),
-            nn.Linear(128, 64),
+            nn.Linear(128, 128),
             Sin(),
-            nn.Linear(64, 3),
+            nn.Linear(128, 3),
             nn.ReLU())
 
     def forward(self, coords, albedo, normal):
@@ -55,9 +55,9 @@ class MLP(nn.Module):
             nn.ReLU(),
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(128, 64),
+            nn.Linear(128, 128),
             nn.ReLU(),
-            nn.Linear(64, 3),
+            nn.Linear(128, 3),
             nn.ReLU())
 
     def forward(self, coords, albedo, normal):
@@ -109,7 +109,7 @@ if __name__ == "__main__":
     coords = torch.from_numpy(coords).to(device)
 
     # create model
-    model = MLP().to(device)
+    model = SIREN().to(device)
     loss_fn = nn.MSELoss()
     adam = torch.optim.Adam(model.parameters())
     sgd = torch.optim.SGD(model.parameters(), lr=0.0001)
