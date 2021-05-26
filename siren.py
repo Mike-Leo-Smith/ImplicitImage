@@ -14,21 +14,11 @@ class Sin(nn.Module):
         return torch.sin(x)
 
 
-class PositionalEncoding(nn.Module):
-    def __init__(self, num_bands):
-        super(PositionalEncoding, self).__init__()
-        self.num_bands = num_bands
-
-    def forward(self, x):
-        bands = [torch.cos(2 ** (i - self.num_bands) * math.pi * x) for i in range(self.num_bands)]
-        return torch.hstack(bands)
-
-
 class SIREN(nn.Module):
-    def __init__(self):
+    def __init__(self, in_channels, out_channels):
         super(SIREN, self).__init__()
         self.layers = nn.Sequential(
-            nn.Linear(8, 128),
+            nn.Linear(in_channels, 128),
             Sin(),
             nn.Linear(128, 256),
             Sin(),
@@ -36,32 +26,10 @@ class SIREN(nn.Module):
             Sin(),
             nn.Linear(128, 128),
             Sin(),
-            nn.Linear(128, 3),
+            nn.Linear(128, out_channels),
             nn.ReLU())
 
-    def forward(self, coords, albedo, normal):
-        x = torch.hstack([coords, albedo, normal])
-        return self.layers(x)
-
-
-class MLP(nn.Module):
-    def __init__(self):
-        super(MLP, self).__init__()
-        self.layers = nn.Sequential(
-            PositionalEncoding(16),
-            nn.Linear(16 * 8, 128),
-            nn.ReLU(),
-            nn.Linear(128, 256),
-            nn.ReLU(),
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Linear(128, 128),
-            nn.ReLU(),
-            nn.Linear(128, 3),
-            nn.ReLU())
-
-    def forward(self, coords, albedo, normal):
-        x = torch.hstack([coords, albedo, normal])
+    def forward(self, x):
         return self.layers(x)
 
 
@@ -87,33 +55,45 @@ if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device}")
 
+    resize = True
+
     # load dataset
-    image = np.clip(cv.imread("data/color.exr", cv.IMREAD_UNCHANGED), 0, 1)
-    reference = np.clip(cv.imread("data/reference.exr", cv.IMREAD_UNCHANGED), 0, 1)
-    albedo = cv.imread("data/albedo.exr", cv.IMREAD_UNCHANGED)
-    normal = cv.imread("data/normal.exr", cv.IMREAD_UNCHANGED)
+    imread_mode = cv.IMREAD_UNCHANGED
+    image = cv.imread("data/color.exr", imread_mode)
+    reference = cv.imread("data/reference.exr", imread_mode)
+    albedo = cv.imread("data/albedo.exr", imread_mode) * math.pi * 2
+    normal = cv.imread("data/normal.exr", imread_mode) * math.pi + math.pi
+    shadow = cv.imread("data/visibility.exr", imread_mode) * math.pi * 2
+    depth = 1 / (cv.imread("data/depth.exr", imread_mode) + 1) * math.pi * 2
+    specular = np.log(cv.imread("data/specular.exr", imread_mode) + 1) * math.pi * 2
+    diffuse = np.log(cv.imread("data/diffuse.exr", imread_mode) + 1) * math.pi * 2
+    features = [albedo, normal, shadow, depth]
     height, width = image.shape[:2]
     width, height = width // 2, height // 2
     pixel_count = height * width
-    image = cv.resize(image, (width, height))
-    reference = cv.resize(reference, (width, height))
-    albedo = cv.resize(albedo, (width, height)) * math.pi * 2
-    normal = cv.resize(normal, (width, height)) * math.pi + math.pi
+    if resize:
+        features = [cv.resize(f, (width, height)) for f in features]
+        image = cv.resize(image, (width, height))
+        reference = cv.resize(reference, (width, height))
     image_tm = tonemapping(image)
     reference_tm = tonemapping(reference)
     cv.imshow("Origin", image_tm)
     cv.imshow("Reference", reference_tm)
     cv.waitKey(1)
-    x_coords = np.transpose(np.reshape(np.repeat(np.arange(width, dtype=np.float32), height), [width, height])) / width * math.pi * 2
-    y_coords = np.reshape(np.repeat(np.arange(height, dtype=np.float32), width), [height, width]) / height * math.pi * 2
+    coord_scale = torch.from_numpy(np.array([[1 / width, 1 / height]], dtype=np.float32) * math.pi * 2).to(device)
+    x_coords = np.transpose(
+        np.reshape(np.repeat(np.arange(width, dtype=np.float32), height), [width, height]))
+    y_coords = np.reshape(np.repeat(np.arange(height, dtype=np.float32), width), [height, width])
     coords = np.reshape(np.dstack([x_coords, y_coords]), [-1, 2])
-    image = torch.from_numpy(np.reshape(image, [-1, 3])).to(device)
-    albedo = torch.from_numpy(np.reshape(albedo, [-1, 3])).to(device)
-    normal = torch.from_numpy(np.reshape(normal, [-1, 3])).to(device)
-    coords = torch.from_numpy(coords).to(device)
+    image = torch.log(torch.from_numpy(np.reshape(image, [-1, 3])).to(device) + 1)
+    features = [f if len(f.shape) == 3 else f[:, :, np.newaxis] for f in features]
+    features = [torch.from_numpy(np.reshape(f, [-1, f.shape[-1]])).to(device) for f in features]
+    coords = torch.from_numpy(coords).to(device) * coord_scale
 
     # create model
-    model = SIREN().to(device)
+    in_channels = 2 + sum(f.shape[-1] for f in features)
+    out_channels = 3
+    model = SIREN(in_channels, out_channels).to(device)
     loss_fn = nn.MSELoss()
     adam = torch.optim.Adam(model.parameters())
     sgd = torch.optim.SGD(model.parameters(), lr=0.0001)
@@ -123,27 +103,30 @@ if __name__ == "__main__":
     accum = None
     frame_count = 0
     batch_size = 1024 * 64
-    for epoch in range(4096 * 4096):
+    num_epochs = 2048 if resize else 1024
+    accum_start = 768 if resize else 384
+    for epoch in range(num_epochs):
         indices = torch.randperm(pixel_count).to(device)
         # optimizer = adam if epoch < 1024 else sgd
         optimizer = adam
         for i in range(0, pixel_count, batch_size):
             # jitter = torch.rand_like(coords)
             jitter = torch.zeros_like(coords)
-            x, x_albedo, x_normal, y = (coords + jitter)[indices[i:i + batch_size]], \
-                                       albedo[indices[i:i + batch_size]], \
-                                       normal[indices[i:i + batch_size]], \
-                                       image[indices[i:i + batch_size]]
-            pred = model(x, x_albedo, x_normal)
+            x = (coords + jitter)[indices[i:i + batch_size]]
+            x_features = torch.hstack([x] + [f[indices[i:i + batch_size]] for f in features])
+            y = image[indices[i:i + batch_size]]
+            pred = model(x_features)
             loss = loss_fn(pred, y)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
         # test
-        # jitter = torch.rand_like(coords)
-        jitter = torch.zeros_like(coords)
-        recon = np.reshape(model(coords + jitter, albedo, normal).detach().cpu().numpy(), [height, width, 3])
-        if epoch >= 768:
+        jitter = torch.rand_like(coords) * coord_scale
+        # jitter = torch.zeros_like(coords)
+        x_features = torch.hstack([coords + jitter] + features)
+        recon = np.reshape(model(x_features).detach().cpu().numpy(), [height, width, 3])
+        recon = np.exp(recon) - 1
+        if epoch >= accum_start:
             # accum = recon if accum is None else 0.8 * accum + 0.2 * recon
             frame_count += 1
             t = 1 / frame_count
@@ -158,5 +141,5 @@ if __name__ == "__main__":
         print(f"Epoch #{epoch}: {np.sqrt(np.mean(np.square(np.float32(abs_diff))))}")
         cv.imshow("Error", cv.applyColorMap(abs_diff, cv.COLORMAP_JET))
         cv.waitKey(1)
-        # cv.imwrite(f"data/test-{epoch}.exr", recon)
+    cv.imwrite(f"data/result.exr", accum)
     cv.waitKey()
