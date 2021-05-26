@@ -34,9 +34,9 @@ class SIREN(nn.Module):
             Sin(),
             nn.Linear(128, 128),
             Sin(),
-            nn.Linear(128, 64),
-            Sin(),
-            nn.Linear(64, 3),
+            # nn.Linear(128, 128),
+            # Sin(),
+            nn.Linear(128, 3),
             nn.ReLU())
 
     def forward(self, coords, albedo, normal):
