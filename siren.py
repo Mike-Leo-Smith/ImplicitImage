@@ -2,6 +2,7 @@ import cv2 as cv
 import numpy as np
 import torch
 from torch import nn
+from torchinfo import summary
 import math
 
 
@@ -29,13 +30,13 @@ class SIREN(nn.Module):
         self.layers = nn.Sequential(
             nn.Linear(8, 256),
             Sin(),
-            nn.Linear(256, 256),
+            nn.Linear(256, 128),
             Sin(),
-            nn.Linear(256, 256),
+            nn.Linear(128, 128),
             Sin(),
-            nn.Linear(256, 256),
+            nn.Linear(128, 64),
             Sin(),
-            nn.Linear(256, 3),
+            nn.Linear(64, 3),
             nn.ReLU())
 
     def forward(self, coords, albedo, normal):
@@ -86,7 +87,7 @@ if __name__ == "__main__":
     print(f"Device: {device}")
 
     # load dataset
-    image = np.clip(cv.imread("data/color.exr", cv.IMREAD_UNCHANGED), 0, 1)
+    image = np.clip(cv.imread("data/reference.exr", cv.IMREAD_UNCHANGED), 0, 1)
     albedo = cv.imread("data/albedo.exr", cv.IMREAD_UNCHANGED)
     normal = cv.imread("data/normal.exr", cv.IMREAD_UNCHANGED)
     height, width = image.shape[:2]
@@ -111,6 +112,7 @@ if __name__ == "__main__":
     loss_fn = nn.MSELoss()
     adam = torch.optim.Adam(model.parameters())
     sgd = torch.optim.SGD(model.parameters(), lr=0.0001)
+    summary(model)
 
     # train
     accum = None
