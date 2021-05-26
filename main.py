@@ -83,7 +83,8 @@ class SIREN(nn.Module):
         out =  relu(self.layer5(torch.cat([out1.T, out.T]).T))
         # print(out.shape, out0.shape)
         out =  self.layer6(torch.cat([out0.T, out.T]).T)
-        return sigmoid(out)
+        # return sigmoid(out)
+        return relu(out)
 
 
 def rgb2srgb(image):
@@ -107,7 +108,7 @@ if __name__ == "__main__":
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print(device)
     # load dataset
-    color = cv.imread("data/color.exr", cv.IMREAD_UNCHANGED)
+    color = cv.imread("data/reference.exr", cv.IMREAD_UNCHANGED)
     normal = cv.imread("data/normal.exr", cv.IMREAD_UNCHANGED)
     albedo = cv.imread("data/albedo.exr", cv.IMREAD_UNCHANGED)
     # print(color, normal)

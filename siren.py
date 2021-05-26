@@ -27,17 +27,19 @@ class SIREN(nn.Module):
     def __init__(self):
         super(SIREN, self).__init__()
         self.layers = nn.Sequential(
-            nn.Linear(2, 256),
+            nn.Linear(8, 256),
             Sin(),
-            nn.Linear(256, 128),
+            nn.Linear(256, 256),
             Sin(),
-            nn.Linear(128, 64),
+            nn.Linear(256, 256),
             Sin(),
-            nn.Linear(64, 16),
+            nn.Linear(256, 256),
             Sin(),
-            nn.Linear(16, 3))
+            nn.Linear(256, 3),
+            nn.ReLU())
 
-    def forward(self, x):
+    def forward(self, coords, albedo, normal):
+        x = torch.hstack([coords, albedo, normal])
         return self.layers(x)
 
 
@@ -81,48 +83,73 @@ def tonemapping(x):
 
 if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Device: {device}")
 
     # load dataset
-    image = np.clip(cv.imread("data/reference.exr", cv.IMREAD_UNCHANGED), 0, 1)
+    image = np.clip(cv.imread("data/color.exr", cv.IMREAD_UNCHANGED), 0, 1)
+    albedo = cv.imread("data/albedo.exr", cv.IMREAD_UNCHANGED)
+    normal = cv.imread("data/normal.exr", cv.IMREAD_UNCHANGED)
     height, width = image.shape[:2]
-    image = cv.resize(image, (width // 4, height // 4))
+    width, height = width // 2, height // 2
+    pixel_count = height * width
+    image = cv.resize(image, (width, height))
+    albedo = cv.resize(albedo, (width, height)) * 10
+    normal = cv.resize(normal, (width, height)) * 5 + 5
     image_tm = tonemapping(image)
     cv.imshow("Origin", image_tm)
     cv.waitKey(1)
-    height, width = image.shape[:2]
-    pixel_count = height * width
     x_coords = np.transpose(np.reshape(np.repeat(np.arange(width, dtype=np.float32), height), [width, height]))
     y_coords = np.reshape(np.repeat(np.arange(height, dtype=np.float32), width), [height, width])
     coords = np.reshape(np.dstack([x_coords, y_coords]), [-1, 2])
-    image = np.reshape(image, [-1, 3])
-    dataset = torch.from_numpy(np.float32(np.hstack([coords, image]))).to(device)
+    image = torch.from_numpy(np.reshape(image, [-1, 3])).to(device)
+    albedo = torch.from_numpy(np.reshape(albedo, [-1, 3])).to(device)
+    normal = torch.from_numpy(np.reshape(normal, [-1, 3])).to(device)
+    coords = torch.from_numpy(coords).to(device)
 
     # create model
     model = SIREN().to(device)
     loss_fn = nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters())
+    adam = torch.optim.Adam(model.parameters())
+    sgd = torch.optim.SGD(model.parameters(), lr=0.0001)
 
     # train
-    taa = None
-    batch_size = 256
-    indices = np.arange(pixel_count)
-    for epoch in range(4096):
-        np.random.shuffle(indices)
+    accum = None
+    frame_count = 0
+    batch_size = 1024 * 64
+    for epoch in range(4096 * 4096):
+        indices = torch.randperm(pixel_count).to(device)
+        # optimizer = adam if epoch < 1024 else sgd
+        optimizer = adam
         for i in range(0, pixel_count, batch_size):
-            batch = dataset[indices[i:i + batch_size]]
-            x, y = batch[:, :2], batch[:, 2:]
-            pred = model(x)
+            # jitter = torch.rand_like(coords)
+            jitter = torch.zeros_like(coords)
+            x, x_albedo, x_normal, y = (coords + jitter)[indices[i:i + batch_size]], \
+                                       albedo[indices[i:i + batch_size]], \
+                                       normal[indices[i:i + batch_size]], \
+                                       image[indices[i:i + batch_size]]
+            pred = model(x, x_albedo, x_normal)
             loss = loss_fn(pred, y)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
         # test
-        recon = np.reshape(model(torch.from_numpy(coords)).detach().numpy(), [height, width, 3])
-        taa = recon if epoch == 0 else 0.8 * taa + 0.2 * recon
-        taa_tm = tonemapping(taa)
-        cv.imshow("Reconstruct", taa_tm)
-        abs_diff = cv.absdiff(taa_tm, image_tm)
+        jitter = torch.rand_like(coords)
+        # jitter = torch.zeros_like(coords)
+        recon = np.reshape(model(coords + jitter, albedo, normal).detach().cpu().numpy(), [height, width, 3])
+        if epoch >= 1024:
+            # accum = recon if accum is None else 0.8 * accum + 0.2 * recon
+            frame_count += 1
+            t = 1 / frame_count
+            accum = recon if accum is None else (1 - t) * accum + t * recon
+            recon = accum
+        if (epoch + 1) % 64 == 0:
+            batch_size = max(batch_size // 2, 4096)
+            print(f"Batch Size: {batch_size}")
+        recon_tm = tonemapping(recon)
+        cv.imshow("Reconstruct", recon_tm)
+        abs_diff = cv.absdiff(recon_tm, image_tm)
         print(f"Epoch #{epoch}: {np.sqrt(np.mean(np.square(np.float32(abs_diff))))}")
         cv.imshow("Difference", cv.applyColorMap(abs_diff, cv.COLORMAP_JET))
         cv.waitKey(1)
-        cv.imwrite(f"data/test-{epoch}.exr", taa)
+        # cv.imwrite(f"data/test-{epoch}.exr", recon)
+    cv.waitKey()
